@@ -1,0 +1,23 @@
+flask
+fastapi
+python-multipart
+pytesseract
+pillow
+pdf2image
+spacy
+scispacy
+# scispacy model (install via pip directly if preferred):
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
+transformers
+sentencepiece
+# CORS for frontend development
+flask-cors
+# Optional: torch required by some transformer models. Install the correct wheel for your OS/Python
+# torch
+google-cloud-vision
+boto3
+azure-ai-translation-text
+python-dotenv
+requests
+
+PyPDF2
