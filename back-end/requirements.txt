@@ -12,6 +12,8 @@ transformers
 sentencepiece
 # CORS for frontend development
 flask-cors
+# Pin numpy to <2.0.0 to avoid compatibility issues with torch/transformers
+numpy<2.0.0
 # Optional: torch required by some transformer models. Install the correct wheel for your OS/Python
 # torch
 google-cloud-vision

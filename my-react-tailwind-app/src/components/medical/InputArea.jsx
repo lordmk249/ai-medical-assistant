@@ -16,7 +16,10 @@ const InputArea = ({ onSendMessage, disabled }) => {
     const handleKeyDown = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            handleSend();
+            // Allow sending if there is text OR a file selected
+            if (input.trim() || selectedFile) {
+                handleSend();
+            }
         }
     };
 
@@ -26,7 +29,8 @@ const InputArea = ({ onSendMessage, disabled }) => {
             const reader = new FileReader();
             reader.onloadend = () => {
                 setSelectedFile({
-                    content: reader.result,
+                    file: file, // Store raw file for upload
+                    content: reader.result, // Keep DataURL for preview
                     type: file.type,
                     name: file.name
                 });

@@ -13,7 +13,7 @@ const Assistant = () => {
     useEffect(() => {
         const greeting = user?.role === 'doctor'
             ? "Welcome, Doctor. I am ready to assist with patient diagnosis and record analysis. Please upload patient records or describe symptoms."
-            : "Hello! I am your AI Medical Assistant. How can I help you today? You can describe your symptoms or upload a medical report.";
+            : "Hi there! 👋 I'm your AI health helper. I can explain your medical reports in simple words. Just upload a photo or PDF of your report!";
         setMessages([{ role: 'assistant', content: greeting }]);
     }, [user?.role]);
 
@@ -25,22 +25,95 @@ const Assistant = () => {
         scrollToBottom();
     }, [messages]);
 
-    const handleSendMessage = async (text, file) => {
-        const newMessage = { role: 'user', content: text, image: file };
+    const handleSendMessage = async (text, fileData) => {
+        const newMessage = { role: 'user', content: text, image: fileData };
         setMessages(prev => [...prev, newMessage]);
         setIsTyping(true);
 
-        // Simulate AI response
-        setTimeout(() => {
-            const response = {
+        if (!fileData?.file) {
+            setTimeout(() => {
+                setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: "Please upload a medical report (PDF or Image) for me to analyze. I currently require a file to provide medical insights."
+                }]);
+                setIsTyping(false);
+            }, 600);
+            return;
+        }
+
+        try {
+            const formData = new FormData();
+            formData.append('file', fileData.file);
+            formData.append('translate_to', 'ar'); // Default to Arabic as per requirements
+
+            const res = await fetch('/process', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(`Server error (${res.status}): ${errText}`);
+            }
+
+            const data = await res.json();
+
+            if (data.error) {
+                throw new Error(data.error);
+            }
+
+            // Format the structured response into Markdown based on Role
+            let markdownResponse = "";
+
+            if (user?.role === 'patient') {
+                // Patient View: EXTREMELY Simple
+                markdownResponse += `### 👋 Simple Explanation\n\n`;
+
+                if (data.translation) {
+                    markdownResponse += `${data.translation}\n\n`;
+                } else if (data.summary) {
+                    markdownResponse += `${data.summary}\n\n`;
+                }
+
+                markdownResponse += `\n---\n*⚠️ Important: I am an AI, not a doctor. Please show this to your doctor for real medical advice.*`;
+
+            } else {
+                // Doctor View: Detailed and Clinical
+                markdownResponse += `### 🩺 Clinical Analysis\n\n`;
+
+                if (data.summary) {
+                    markdownResponse += `**Clinical Summary:**\n${data.summary}\n\n`;
+                }
+
+                if (data.entities && Object.keys(data.entities).length > 0) {
+                    markdownResponse += `**Extracted Entities:**\n`;
+                    Object.entries(data.entities).forEach(([category, items]) => {
+                        if (Array.isArray(items) && items.length > 0) {
+                            markdownResponse += `- **${category}:** ${items.join(', ')}\n`;
+                        }
+                    });
+                    markdownResponse += `\n`;
+                }
+
+                if (data.translation) {
+                    markdownResponse += `--- \n**Translation (Arabic):**\n${data.translation}\n`;
+                }
+            }
+
+            setMessages(prev => [...prev, {
                 role: 'assistant',
-                content: user?.role === 'doctor'
-                    ? "I've analyzed the clinical data. Based on the symptoms and history provided, here are the potential differentials..."
-                    : "I understand. Based on what you described, it sounds like you might be experiencing..."
-            };
-            setMessages(prev => [...prev, response]);
+                content: markdownResponse
+            }]);
+
+        } catch (error) {
+            console.error("Analysis failed:", error);
+            setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: `❌ **Analysis Failed**\n\nI encountered an error while processing your file:\n> ${error.message}\n\nPlease try again or check the file format.`
+            }]);
+        } finally {
             setIsTyping(false);
-        }, 2000);
+        }
     };
 
     return (

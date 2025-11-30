@@ -2,9 +2,21 @@ import os
 import tempfile
 import shutil
 import uuid
+import threading
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import requests
+
+# Configuration
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+ALLOWED_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff'}
+REQUEST_TIMEOUT = 30  # seconds for external API calls
+
+# Global AI Models
+nlp = None
+summarizer = None
+translation_models = {}
+translation_lock = threading.Lock()
 
 # load .env if present
 load_dotenv()
@@ -19,12 +31,74 @@ if CORS:
     CORS(app)
 
 
+def load_models():
+    """Load AI models at startup to avoid latency per request."""
+    global nlp, summarizer
+    print("Loading AI models... This may take a moment.")
+    
+    # Load SciSpaCy or fallback
+    try:
+        import spacy
+        try:
+            nlp = spacy.load("en_ner_bc5cdr_md")
+            print("Loaded SciSpaCy model: en_ner_bc5cdr_md")
+        except Exception:
+            try:
+                nlp = spacy.load("en_core_sci_sm")
+                print("Loaded SciSpaCy model: en_core_sci_sm")
+            except Exception:
+                try:
+                    nlp = spacy.load("en_core_web_sm")
+                    print("Loaded fallback model: en_core_web_sm")
+                except Exception as e:
+                    print(f"Failed to load any SpaCy model: {e}")
+    except Exception as e:
+        print(f"SpaCy import failed: {e}")
+
+    # Load Summarizer
+    try:
+        from transformers import pipeline
+        summarizer = pipeline("summarization")
+        print("Loaded Summarization pipeline")
+    except Exception as e:
+        print(f"Failed to load summarization pipeline: {e}")
+
+
+# Initialize models on startup
+load_models()
+
+
 @app.route("/")
 def index():
     return (
         "<h1>AI Medical Assistant</h1>"
         "<p>POST a file (image or PDF) to <code>/process</code>. Check health at <code>/healthz</code>.</p>"
+        f"<p>Max file size: {MAX_FILE_SIZE // (1024*1024)}MB. Supported formats: {', '.join(ALLOWED_EXTENSIONS)}</p>"
     )
+
+
+def validate_file(file):
+    """Validate uploaded file for security and size constraints."""
+    if not file or file.filename == "":
+        return False, "Empty filename"
+    
+    # Check file extension
+    _, ext = os.path.splitext(file.filename.lower())
+    if ext not in ALLOWED_EXTENSIONS:
+        return False, f"Unsupported file type: {ext}. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
+    
+    # Check file size if available
+    file.seek(0, os.SEEK_END)
+    size = file.tell()
+    file.seek(0)
+    
+    if size > MAX_FILE_SIZE:
+        return False, f"File too large. Max size: {MAX_FILE_SIZE // (1024*1024)}MB"
+    
+    if size == 0:
+        return False, "Empty file"
+    
+    return True, None
 
 
 def image_to_text(image_path):
@@ -48,10 +122,45 @@ def image_to_text(image_path):
                 raise RuntimeError(
                     "Tesseract binary not found. Install tesseract (conda-forge or brew) and ensure it's on PATH."
                 )
+            # check that tessdata (language files) exist
+            import sys
+            tessdata_prefix = os.getenv("TESSDATA_PREFIX")
+            possible_tessdirs = []
+            if tessdata_prefix:
+                possible_tessdirs.append(os.path.join(tessdata_prefix, "tessdata"))
+            possible_tessdirs.append(os.path.join(sys.prefix, "share", "tessdata"))
+            possible_tessdirs.append("/usr/local/share/tessdata")
+            possible_tessdirs.append("/opt/homebrew/share/tessdata")
+
+            eng_found = False
+            for d in possible_tessdirs:
+                try:
+                    if os.path.exists(os.path.join(d, "eng.traineddata")):
+                        eng_found = True
+                        # CRITICAL FIX: Set TESSDATA_PREFIX so the binary knows where to look
+                        # The prefix must be the PARENT of the tessdata directory
+                        tess_prefix = os.path.dirname(d)
+                        os.environ["TESSDATA_PREFIX"] = tess_prefix
+                        print(f"Found tesseract data in {d}, setting TESSDATA_PREFIX={tess_prefix}")
+                        break
+                except Exception:
+                    continue
+
+            if not eng_found:
+                hint = (
+                    "Tesseract couldn't load any languages (eng.traineddata missing).\n"
+                    "Make sure the tessdata directory contains 'eng.traineddata' and set TESSDATA_PREFIX to the parent directory of 'tessdata'.\n"
+                    "Example (zsh): export TESSDATA_PREFIX=\"$(python -c 'import sys,os; print(os.path.join(sys.prefix, \"share\", \"tessdata\"))')\"\n"
+                    "Or copy eng.traineddata to a common location: sudo cp eng.traineddata /opt/homebrew/share/tessdata/"
+                )
+                raise RuntimeError(hint)
+
             img = Image.open(image_path)
             text = pytesseract.image_to_string(img)
             if text and text.strip():
                 return text
+        except RuntimeError:
+            raise
         except Exception as e:
             # continue to optional fallback
             print(f"pytesseract error: {e}")
@@ -74,6 +183,20 @@ def image_to_text(image_path):
                 return texts[0].description
     except Exception as ge:
         print(f"Google Vision error: {ge}")
+
+    # Optional fallback: EasyOCR (pure-python reader, requires torch). Try if installed.
+    try:
+        import easyocr
+        reader = easyocr.Reader(['en'], gpu=False)
+        results = reader.readtext(image_path)
+        if results:
+            # results are (bbox, text, confidence)
+            text = "\n".join([r[1] for r in results if r and len(r) > 1])
+            if text.strip():
+                return text
+    except Exception as ee:
+        # don't fail here; easyocr may not be installed or may fail without GPU/torch
+        print(f"EasyOCR fallback error: {ee}")
 
     raise RuntimeError(
         "OCR failed: no usable OCR method succeeded.\n"
@@ -146,52 +269,37 @@ def pdf_to_text(pdf_path):
 
     pages_text = []
     for img in images:
+        tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
-                img.save(tmp_img.name, 'JPEG')
-                text = image_to_text(tmp_img.name)
-                pages_text.append(text)
-                os.unlink(tmp_img.name)
+                tmp_path = tmp_img.name
+                img.save(tmp_path, 'JPEG')
+            text = image_to_text(tmp_path)
+            pages_text.append(text)
         except Exception as page_e:
             pages_text.append(f"[page error: {page_e}]")
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
     return "\n\n".join(pages_text)
 
 
 def extract_entities(text):
-    """Extract medical entities using SciSpaCy (free) by default."""
+    """Extract medical entities using global SciSpaCy model."""
     from collections import defaultdict
-    try:
-        import spacy
-        # Preferred: SciSpacy clinical model
-        try:
-            nlp = spacy.load("en_ner_bc5cdr_md")
-        except Exception as load_err:
-            # Model not installed or load failed. Provide clear guidance and fall back.
-            print(f"SciSpaCy model load failed: {load_err}")
-            fallback_msg = (
-                "SciSpaCy model 'en_ner_bc5cdr_md' not found or failed to load.\n"
-                "You can install it (example) via pip from the project's GitHub releases:\n"
-                "  pip install scispacy\n"
-                "  pip install https://github.com/allenai/scispacy/releases/download/v0.5.1/en_ner_bc5cdr_md-0.5.1.tar.gz\n"
-                "If the above 404s, the project release asset URL may have changed — as a safe fallback we'll use spaCy's small English model (en_core_web_sm) to extract generic entities.")
-            try:
-                # Try SciSpacy alternate package name or other local sci models
-                nlp = spacy.load("en_core_sci_sm")
-            except Exception:
-                try:
-                    # Last-resort: spaCy small model
-                    try:
-                        nlp = spacy.load("en_core_web_sm")
-                    except Exception:
-                        # If en_core_web_sm is not installed, raise informative error
-                        raise RuntimeError(
-                            fallback_msg
-                            + "\nTo install fallback spaCy model: python -m spacy download en_core_web_sm"
-                        )
-                except Exception as fallback_err:
-                    print(f"Entity extraction fallback failed: {fallback_err}")
-                    return {"error": str(fallback_err)}
+    
+    if nlp is None:
+        return {"error": "Entity extraction model not loaded."}
 
+    try:
+        # Limit text length to avoid processing issues
+        max_chars = 100000
+        if len(text) > max_chars:
+            text = text[:max_chars]
+        
         # Run the pipeline and collect entities
         doc = nlp(text)
         grouped = defaultdict(list)
@@ -211,10 +319,11 @@ def extract_entities(text):
 
 
 def summarize_text(text):
-    """Summarize text using local transformers summarization pipeline."""
+    """Summarize text using global transformers summarization pipeline."""
+    if summarizer is None:
+        return "Summarization model not loaded."
+
     try:
-        from transformers import pipeline
-        summarizer = pipeline("summarization")
         if len(text.split()) < 40:
             return text
         
@@ -223,9 +332,15 @@ def summarize_text(text):
         max_len = min(120, input_len)
         min_len = min(30, max_len - 1)
         
+        # Limit input length for summarization
+        max_input_words = 1000
+        if input_len > max_input_words:
+            text = " ".join(text.split()[:max_input_words])
+        
         out = summarizer(text, max_length=max_len, min_length=min_len, truncation=True)
         return out[0]["summary_text"]
     except Exception as e:
+        print(f"Summarization error: {e}")
         return f"Summarization error: {e}"
 
 
@@ -233,17 +348,17 @@ def translate_text(text, target_lang="ar"):
     """Translate English text to target_lang using MarianMT (free) by default."""
     if target_lang == "en":
         return text
-    try:
-        from transformers import MarianMTModel, MarianTokenizer
-        model_name = f"Helsinki-NLP/opus-mt-en-{target_lang}"
-        tokenizer = MarianTokenizer.from_pretrained(model_name)
-        model = MarianMTModel.from_pretrained(model_name)
-        inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True)
-        translated = model.generate(**inputs)
-        return tokenizer.decode(translated[0], skip_special_tokens=True)
-    except Exception as e:
-        print(f"MarianMT error: {e}")
-    # optional Azure fallback if configured
+    
+    # Validate target language format
+    if not target_lang or not target_lang.isalpha() or len(target_lang) > 10:
+        return f"Invalid target language code: {target_lang}"
+    
+    # Limit text length
+    max_chars = 5000
+    if len(text) > max_chars:
+        text = text[:max_chars]
+    
+    # Check Azure first if configured
     try:
         key = os.getenv('AZURE_TRANSLATOR_KEY')
         endpoint = os.getenv('AZURE_TRANSLATOR_ENDPOINT')
@@ -259,14 +374,45 @@ def translate_text(text, target_lang="ar"):
                 'X-ClientTraceId': str(uuid.uuid4())
             }
             body = [{'text': text}]
-            response = requests.post(constructed_url, params=params, headers=headers, json=body)
+            response = requests.post(
+                constructed_url, 
+                params=params, 
+                headers=headers, 
+                json=body,
+                timeout=REQUEST_TIMEOUT
+            )
             response.raise_for_status()
             result = response.json()
             return result[0]['translations'][0]['text']
+    except requests.exceptions.Timeout:
+        print("Azure Translator timeout")
     except Exception as ae:
         print(f"Azure Translator fallback error: {ae}")
 
-    return f"Translation failed: no available translator for target '{target_lang}'"
+    # Fallback to local MarianMT with caching and thread safety
+    try:
+        from transformers import MarianMTModel, MarianTokenizer
+        
+        model_name = f"Helsinki-NLP/opus-mt-en-{target_lang}"
+        
+        with translation_lock:
+            if model_name not in translation_models:
+                print(f"Loading translation model: {model_name}")
+                try:
+                    tokenizer = MarianTokenizer.from_pretrained(model_name)
+                    model = MarianMTModel.from_pretrained(model_name)
+                    translation_models[model_name] = (tokenizer, model)
+                except Exception as load_err:
+                    return f"Translation model not available for language: {target_lang} ({load_err})"
+            
+            tokenizer, model = translation_models[model_name]
+
+        inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        translated = model.generate(**inputs)
+        return tokenizer.decode(translated[0], skip_special_tokens=True)
+    except Exception as e:
+        print(f"MarianMT error: {e}")
+        return f"Translation failed: {e}"
 
 
 @app.route("/process", methods=["POST"])
@@ -275,28 +421,42 @@ def process_file():
         return jsonify({"error": "no file provided"}), 400
 
     f = request.files["file"]
-    if f.filename == "":
-        return jsonify({"error": "empty filename"}), 400
+    
+    # Validate file
+    is_valid, error_msg = validate_file(f)
+    if not is_valid:
+        return jsonify({"error": error_msg}), 400
 
     tmpdir = tempfile.mkdtemp(prefix="ai_med_")
     try:
-        upload_path = os.path.join(tmpdir, f.filename)
+        # Sanitize filename to prevent path traversal
+        safe_filename = os.path.basename(f.filename)
+        upload_path = os.path.join(tmpdir, safe_filename)
         f.save(upload_path)
 
-        name, ext = os.path.splitext(f.filename.lower())
+        name, ext = os.path.splitext(safe_filename.lower())
         if ext in [".pdf"]:
             text = pdf_to_text(upload_path)
         else:
             text = image_to_text(upload_path)
 
+        if not text or not text.strip():
+            return jsonify({"error": "No text could be extracted from the file"}), 400
+
         entities = extract_entities(text)
+        
+        # Check if entity extraction failed
+        if isinstance(entities, dict) and "error" in entities:
+            entities = {"warning": entities["error"]}
+        
         summary = summarize_text(text)
 
         target = request.form.get("translate_to", "ar")
         translation = translate_text(summary if isinstance(summary, str) else text, target_lang=target)
 
         resp = {
-            "text": text,
+            "text": text[:10000],  # Limit response size
+            "text_length": len(text),
             "entities": entities,
             "summary": summary,
             "translation": translation,
@@ -304,12 +464,19 @@ def process_file():
 
         return jsonify(resp)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Treat OCR/system dependency failures as client-side configuration issues (400)
+        msg = str(e)
+        ocr_indicators = ["OCR failed", "Tesseract", "poppler", "pdfinfo", "pdf2image", "google", "traineddata"]
+        if any(indicator.lower() in msg.lower() for indicator in ocr_indicators):
+            return jsonify({"error": msg}), 400
+        
+        print(f"Unexpected error in process_file: {e}")
+        return jsonify({"error": f"Processing failed: {msg}"}), 500
     finally:
         try:
             shutil.rmtree(tmpdir)
-        except Exception:
-            pass
+        except Exception as cleanup_err:
+            print(f"Cleanup error: {cleanup_err}")
 
 
 @app.route("/analyze", methods=["POST"])  # alias
@@ -330,24 +497,56 @@ def health():
         checks["tesseract"] = bool(which("tesseract"))
     except Exception:
         checks["tesseract"] = False
+
+    # report tessdata/TESSDATA_PREFIX and whether eng.traineddata exists in common locations
     try:
-        import spacy
-        checks["spacy_installed"] = True
-        try:
-            spacy.util.get_package_version("en_ner_bc5cdr_md")
-            checks["scispacy_model_present"] = True
-        except Exception:
-            checks["scispacy_model_present"] = False
-    except Exception:
-        checks["spacy_installed"] = False
-        checks["scispacy_model_present"] = False
+        tess_prefix = os.getenv("TESSDATA_PREFIX")
+        checks["TESSDATA_PREFIX"] = tess_prefix or None
+        import sys
+        possible = []
+        if tess_prefix:
+            possible.append(os.path.join(tess_prefix, "tessdata"))
+        possible.append(os.path.join(sys.prefix, "share", "tessdata"))
+        possible.append("/usr/local/share/tessdata")
+        possible.append("/opt/homebrew/share/tessdata")
+        checks["tessdata_checked_paths"] = possible
+        checks["eng_traineddata_found"] = any(
+            os.path.exists(os.path.join(p, "eng.traineddata")) for p in possible
+        )
+    except Exception as e:
+        checks["tessdata_check_error"] = str(e)
+
+    # try listing tesseract languages for more diagnostics
     try:
-        import transformers
-        checks["transformers_installed"] = True
-    except Exception:
-        checks["transformers_installed"] = False
+        import subprocess
+        out = subprocess.run(
+            ["tesseract", "--list-langs"], 
+            capture_output=True, 
+            text=True, 
+            timeout=5
+        )
+        if out.returncode == 0:
+            # output includes header lines; parse into lines
+            lines = [l.strip() for l in out.stdout.splitlines() if l.strip()]
+            checks["tesseract_langs"] = lines
+        else:
+            checks["tesseract_list_error"] = out.stderr.strip() or out.stdout.strip()
+    except Exception as e:
+        checks["tesseract_list_error"] = str(e)
+
+    checks["spacy_loaded"] = nlp is not None
+    checks["summarizer_loaded"] = summarizer is not None
+    checks["max_file_size_mb"] = MAX_FILE_SIZE // (1024 * 1024)
+    checks["allowed_extensions"] = list(ALLOWED_EXTENSIONS)
+
     return jsonify(checks)
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    port = int(os.getenv("PORT", 8000))
+    debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+    
+    if debug:
+        print("WARNING: Running in debug mode. This should NOT be used in production!")
+    
+    app.run(host="0.0.0.0", port=port, debug=debug)
