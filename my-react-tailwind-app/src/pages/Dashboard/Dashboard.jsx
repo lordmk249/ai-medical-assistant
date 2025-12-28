@@ -8,7 +8,7 @@ const Dashboard = () => {
     const navigate = useNavigate();
 
     const handleRoleSelect = (role) => {
-        login(role);
+        login(role, 'medical');
         navigate('/assistant');
     };
 
@@ -25,8 +25,8 @@ const Dashboard = () => {
 
     const itemVariants = {
         hidden: { opacity: 0, y: 30 },
-        visible: { 
-            opacity: 1, 
+        visible: {
+            opacity: 1,
             y: 0,
             transition: {
                 type: "spring",
@@ -48,7 +48,7 @@ const Dashboard = () => {
             <div className="absolute top-40 right-20 w-32 h-32 bg-purple-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 floating" style={{ animationDelay: '2s' }} />
             <div className="absolute bottom-20 left-40 w-32 h-32 bg-pink-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 floating" style={{ animationDelay: '4s' }} />
 
-            <motion.div 
+            <motion.div
                 className="relative z-10 text-center space-y-4"
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -62,7 +62,7 @@ const Dashboard = () => {
                 <p className="text-xl text-gray-600 font-medium">Select your role to unlock intelligent healthcare insights</p>
             </motion.div>
 
-            <motion.div 
+            <motion.div
                 className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl px-4"
                 variants={containerVariants}
                 initial="hidden"
@@ -73,7 +73,7 @@ const Dashboard = () => {
                     onClick={() => handleRoleSelect('doctor')}
                     className="group relative flex flex-col items-center p-8 glass-card rounded-3xl shimmer overflow-hidden"
                     variants={itemVariants}
-                    whileHover={{ 
+                    whileHover={{
                         scale: 1.05,
                         boxShadow: "0 20px 60px rgba(13, 148, 136, 0.3)"
                     }}
@@ -89,8 +89,8 @@ const Dashboard = () => {
                             maskComposite: 'exclude'
                         }}
                     />
-                    
-                    <motion.div 
+
+                    <motion.div
                         className="p-6 rounded-full mb-6 relative"
                         style={{
                             background: 'linear-gradient(135deg, #0d9488, #06b6d4)'
@@ -100,10 +100,10 @@ const Dashboard = () => {
                     >
                         <Stethoscope size={48} className="text-white" />
                     </motion.div>
-                    
+
                     <h2 className="text-2xl font-bold text-gray-800 mb-2">Doctor View</h2>
                     <p className="text-gray-600 text-center">Access advanced diagnostics and clinical analysis tools</p>
-                    
+
                     {/* Hover indicator */}
                     <motion.div
                         className="absolute bottom-4 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100"
@@ -123,7 +123,7 @@ const Dashboard = () => {
                     onClick={() => handleRoleSelect('patient')}
                     className="group relative flex flex-col items-center p-8 glass-card rounded-3xl shimmer overflow-hidden"
                     variants={itemVariants}
-                    whileHover={{ 
+                    whileHover={{
                         scale: 1.05,
                         boxShadow: "0 20px 60px rgba(99, 102, 241, 0.3)"
                     }}
@@ -139,8 +139,8 @@ const Dashboard = () => {
                             maskComposite: 'exclude'
                         }}
                     />
-                    
-                    <motion.div 
+
+                    <motion.div
                         className="p-6 rounded-full mb-6 relative"
                         style={{
                             background: 'linear-gradient(135deg, #6366f1, #a855f7)'
@@ -150,10 +150,10 @@ const Dashboard = () => {
                     >
                         <User size={48} className="text-white" />
                     </motion.div>
-                    
+
                     <h2 className="text-2xl font-bold text-gray-800 mb-2">Patient View</h2>
                     <p className="text-gray-600 text-center">Understand your medical reports in simple terms</p>
-                    
+
                     {/* Hover indicator */}
                     <motion.div
                         className="absolute bottom-4 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100"

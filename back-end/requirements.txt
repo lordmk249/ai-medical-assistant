@@ -23,3 +23,9 @@ python-dotenv
 requests
 
 PyPDF2
+
+# Auth
+flask-sqlalchemy
+flask-jwt-extended
+passlib
+bcrypt

@@ -2,6 +2,25 @@ import os
 import tempfile
 import shutil
 import uuid
+import sys
+
+# CRITICAL FIX: Add conda bin to PATH for OCR tools (poppler, tesseract)
+CONDA_BIN = "/Users/mazinmagdi/miniconda/bin"
+CONDA_TESSDATA = "/Users/mazinmagdi/miniconda/share/tessdata"
+
+if CONDA_BIN not in os.environ["PATH"]:
+    os.environ["PATH"] = CONDA_BIN + os.path.pathsep + os.environ["PATH"]
+
+# Set TESSDATA_PREFIX globally so Tesseract knows where to look for languages
+# We set it to the directory containing eng.traineddata
+os.environ["TESSDATA_PREFIX"] = CONDA_TESSDATA
+
+try:
+    import pytesseract
+    pytesseract.pytesseract.tesseract_cmd = os.path.join(CONDA_BIN, "tesseract")
+except Exception:
+    pass
+
 import threading
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
@@ -21,14 +40,10 @@ translation_lock = threading.Lock()
 # load .env if present
 load_dotenv()
 
-try:
-    from flask_cors import CORS
-except Exception:
-    CORS = None
+from flask_cors import CORS
 
 app = Flask(__name__)
-if CORS:
-    CORS(app)
+CORS(app)
 
 
 def load_models():
@@ -122,45 +137,17 @@ def image_to_text(image_path):
                 raise RuntimeError(
                     "Tesseract binary not found. Install tesseract (conda-forge or brew) and ensure it's on PATH."
                 )
-            # check that tessdata (language files) exist
-            import sys
-            tessdata_prefix = os.getenv("TESSDATA_PREFIX")
-            possible_tessdirs = []
-            if tessdata_prefix:
-                possible_tessdirs.append(os.path.join(tessdata_prefix, "tessdata"))
-            possible_tessdirs.append(os.path.join(sys.prefix, "share", "tessdata"))
-            possible_tessdirs.append("/usr/local/share/tessdata")
-            possible_tessdirs.append("/opt/homebrew/share/tessdata")
-
-            eng_found = False
-            for d in possible_tessdirs:
-                try:
-                    if os.path.exists(os.path.join(d, "eng.traineddata")):
-                        eng_found = True
-                        # CRITICAL FIX: Set TESSDATA_PREFIX so the binary knows where to look
-                        # The prefix must be the PARENT of the tessdata directory
-                        tess_prefix = os.path.dirname(d)
-                        os.environ["TESSDATA_PREFIX"] = tess_prefix
-                        print(f"Found tesseract data in {d}, setting TESSDATA_PREFIX={tess_prefix}")
-                        break
-                except Exception:
-                    continue
-
-            if not eng_found:
-                hint = (
-                    "Tesseract couldn't load any languages (eng.traineddata missing).\n"
-                    "Make sure the tessdata directory contains 'eng.traineddata' and set TESSDATA_PREFIX to the parent directory of 'tessdata'.\n"
-                    "Example (zsh): export TESSDATA_PREFIX=\"$(python -c 'import sys,os; print(os.path.join(sys.prefix, \"share\", \"tessdata\"))')\"\n"
-                    "Or copy eng.traineddata to a common location: sudo cp eng.traineddata /opt/homebrew/share/tessdata/"
-                )
-                raise RuntimeError(hint)
 
             img = Image.open(image_path)
-            text = pytesseract.image_to_string(img)
+            # Use configured TESSDATA_PREFIX if set, else rely on system defaults
+            config = ""
+            tess_prefix = os.getenv("TESSDATA_PREFIX")
+            if tess_prefix:
+                config = f'--tessdata-dir "{tess_prefix}"'
+            
+            text = pytesseract.image_to_string(img, config=config)
             if text and text.strip():
                 return text
-        except RuntimeError:
-            raise
         except Exception as e:
             # continue to optional fallback
             print(f"pytesseract error: {e}")
@@ -210,18 +197,10 @@ def pdf_to_text(pdf_path):
 
     Falls back to PyPDF2 for text-based PDFs.
     """
+    # Try selectable text extraction (PyPDF2) first as it's faster and cleaner if text exists
+    pypdf_text = ""
     try:
-        from pdf2image import convert_from_path, exceptions as pdf2image_exceptions
-        import pytesseract
-    except Exception as e:
-        # try selectable text extraction
-        try:
-            from PyPDF2 import PdfReader
-        except Exception:
-            raise RuntimeError(
-                f"Missing pdf->image dependencies: {e}. Install 'pdf2image' and poppler for OCR, or install 'PyPDF2' to extract text from text-based PDFs."
-            )
-
+        from PyPDF2 import PdfReader
         reader = PdfReader(pdf_path)
         pages_text = []
         for page in reader.pages:
@@ -229,70 +208,84 @@ def pdf_to_text(pdf_path):
                 pages_text.append(page.extract_text() or "")
             except Exception:
                 pages_text.append("")
-        return "\n\n".join(pages_text)
+        pypdf_text = "\n\n".join(pages_text).strip()
+    except Exception:
+        pass
 
-    # convert and OCR
+    # If PyPDF2 worked and got meaningful text, just return it
+    if pypdf_text and len(pypdf_text) > 100:
+        return pypdf_text
+
+    # Otherwise, try OCR (pdf2image + tesseract)
     try:
+        from pdf2image import convert_from_path, exceptions as pdf2image_exceptions
         images = convert_from_path(pdf_path)
+        
+        pages_text = []
+        for img in images:
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
+                    tmp_path = tmp_img.name
+                    img.save(tmp_path, 'JPEG')
+                text = image_to_text(tmp_path)
+                pages_text.append(text)
+            except Exception as page_e:
+                pages_text.append(f"[page error: {page_e}]")
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+        ocr_text = "\n\n".join(pages_text).strip()
+        if ocr_text:
+            return ocr_text
     except Exception as e:
-        # detect missing poppler
-        try:
-            missing_poppler = False
-            if hasattr(pdf2image_exceptions, "PDFInfoNotInstalledError") and isinstance(
-                e, pdf2image_exceptions.PDFInfoNotInstalledError
-            ):
-                missing_poppler = True
-            elif hasattr(pdf2image_exceptions, "PDFPageCountError") and isinstance(
-                e, pdf2image_exceptions.PDFPageCountError
-            ):
-                missing_poppler = "Unable to get page count" in str(e)
-            else:
-                msg = str(e).lower()
-                if "unable to get page count" in msg or "pdfinfo" in msg or "pdftoppm" in msg:
-                    missing_poppler = True
-
-            if missing_poppler:
-                raise RuntimeError(
-                    "Poppler not found or 'pdfinfo' is not in PATH.\n"
-                    "Install poppler (recommended via conda-forge): conda install -c conda-forge poppler\n"
-                    "Or on macOS with Homebrew: brew install poppler\n"
-                    "Then ensure the 'pdfinfo' binary is on your PATH and restart the server."
-                )
-        except RuntimeError:
-            raise
-        except Exception:
-            pass
-
-        raise RuntimeError(
-            f"Error converting PDF to images: {e}. Ensure poppler (pdfinfo/pdftoppm) is installed and available in PATH."
-        )
-
-    pages_text = []
-    for img in images:
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
-                tmp_path = tmp_img.name
-                img.save(tmp_path, 'JPEG')
-            text = image_to_text(tmp_path)
-            pages_text.append(text)
-        except Exception as page_e:
-            pages_text.append(f"[page error: {page_e}]")
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-    return "\n\n".join(pages_text)
+        print(f"OCR attempt failed: {e}")
+    
+    # Final fallback: return whatever PyPDF2 got, even if small
+    if pypdf_text:
+        return pypdf_text
+        
+    # If we got here, everything failed. Let's find out why.
+    error_details = []
+    if not pypdf_text:
+        error_details.append("Text extraction (PyPDF2) returned no text.")
+    
+    # Check for binaries specifically to give clear instructions
+    from shutil import which
+    if not which("pdftoppm"):
+        error_details.append("Missing 'poppler' (pdftoppm). Required for scanned PDFs.")
+    if not which("tesseract"):
+        error_details.append("Missing 'tesseract'. Required for OCR.")
+        
+    error_msg = " | ".join(error_details)
+    raise RuntimeError(f"PDF Analysis Failed: {error_msg}. Please ensure your PDF is not a scanned image, or install 'poppler' and 'tesseract' for OCR support.")
 
 
 def extract_entities(text):
     """Extract medical entities using global SciSpaCy model."""
     from collections import defaultdict
     
+    findings = defaultdict(set)
+    
     if nlp is None:
-        return {"error": "Entity extraction model not loaded."}
+        # FALLBACK: Keyword based extraction
+        import re
+        keywords = {
+            "DISEASE": ["diabetes", "hypertension", "anemia", "infection", "cancer", "tumor", "fever", "cough", "asthma"],
+            "CHEMICAL": ["glucose", "hemoglobin", "cholesterol", "insulin", "aspirin", "penicillin", "vitamin"],
+            "ANATOMY": ["heart", "lung", "liver", "kidney", "blood", "brain", "stomach"],
+        }
+        text_lower = text.lower()
+        for label, words in keywords.items():
+            for word in words:
+                if re.search(r'\b' + word + r'\b', text_lower):
+                    findings[label].add(word.capitalize())
+        
+        # Format as list for JSON response
+        return {k: list(v) for k, v in findings.items()}
 
     try:
         # Limit text length to avoid processing issues
@@ -318,10 +311,50 @@ def extract_entities(text):
         return {"error": f"entity extraction failed: {e}"}
 
 
+def simplify_medical_text(text):
+    """Convert technical medical terms into simple, patient-friendly language."""
+    simplification_map = {
+        r'\bhypertension\b': 'high blood pressure',
+        r'\bdiabetes mellitus\b': 'diabetes (high blood sugar)',
+        r'\banemia\b': 'low iron or blood count',
+        r'\bmyocardial infarction\b': 'heart attack',
+        r'\bglucose\b': 'blood sugar',
+        r'\bred blood cells\b': 'blood units that carry oxygen',
+        r'\bwhite blood cells\b': 'blood units that fight infection',
+        r'\bhemoglobin\b': 'protein that carries oxygen in blood',
+        r'\bcholesterol\b': 'blood fat',
+        r'\bedema\b': 'swelling caused by fluid',
+        r'\bfatigue\b': 'extreme tiredness',
+        r'\bdyspnea\b': 'shortness of breath',
+        r'\belevated\b': 'higher than normal',
+        r'\bdecreased\b': 'lower than normal',
+        r'\bacute\b': 'sudden or short-term',
+        r'\bchronic\b': 'long-term',
+        r'\bbenign\b': 'non-cancerous',
+        r'\bmalignant\b': 'cancerous',
+    }
+    
+    import re
+    simplified = text.lower()
+    for tech, simple in simplification_map.items():
+        simplified = re.sub(tech, simple, simplified)
+    
+    return simplified.capitalize()
+
+
 def summarize_text(text):
     """Summarize text using global transformers summarization pipeline."""
+    # First, simplify the text for the patient
+    text = simplify_medical_text(text)
+    
     if summarizer is None:
-        return "Summarization model not loaded."
+        # FALLBACK: Simple extractive summary
+        sentences = text.split('.')
+        # Pick the first 3 sentences that are reasonably long
+        summary_sentences = [s.strip() for s in sentences if len(s.strip()) > 30][:3]
+        if not summary_sentences:
+            return "This report contains clinical data and medical findings regarding the patient's condition."
+        return ". ".join(summary_sentences) + "."
 
     try:
         if len(text.split()) < 40:
@@ -338,10 +371,11 @@ def summarize_text(text):
             text = " ".join(text.split()[:max_input_words])
         
         out = summarizer(text, max_length=max_len, min_length=min_len, truncation=True)
-        return out[0]["summary_text"]
+        final_summary = out[0]["summary_text"]
+        return simplify_medical_text(final_summary)
     except Exception as e:
         print(f"Summarization error: {e}")
-        return f"Summarization error: {e}"
+        return simplify_medical_text(text[:500]) # Fallback to simplified snippet
 
 
 def translate_text(text, target_lang="ar"):
@@ -398,12 +432,9 @@ def translate_text(text, target_lang="ar"):
         with translation_lock:
             if model_name not in translation_models:
                 print(f"Loading translation model: {model_name}")
-                try:
-                    tokenizer = MarianTokenizer.from_pretrained(model_name)
-                    model = MarianMTModel.from_pretrained(model_name)
-                    translation_models[model_name] = (tokenizer, model)
-                except Exception as load_err:
-                    return f"Translation model not available for language: {target_lang} ({load_err})"
+                tokenizer = MarianTokenizer.from_pretrained(model_name)
+                model = MarianMTModel.from_pretrained(model_name)
+                translation_models[model_name] = (tokenizer, model)
             
             tokenizer, model = translation_models[model_name]
 
@@ -411,8 +442,14 @@ def translate_text(text, target_lang="ar"):
         translated = model.generate(**inputs)
         return tokenizer.decode(translated[0], skip_special_tokens=True)
     except Exception as e:
-        print(f"MarianMT error: {e}")
-        return f"Translation failed: {e}"
+        print(f"MarianMT failed, trying deep-translator: {e}")
+        try:
+            from deep_translator import GoogleTranslator
+            translated = GoogleTranslator(source='auto', target=target_lang).translate(text)
+            return translated
+        except Exception as de:
+            print(f"Deep Translator failed: {de}")
+            return f"(English) {text}" # Final fallback: return original text
 
 
 @app.route("/process", methods=["POST"])
@@ -483,6 +520,94 @@ def process_file():
 def analyze_file():
     return process_file()
 
+
+
+# -------------------------------------------------------------------
+# Database & Auth Configuration
+# -------------------------------------------------------------------
+from flask_sqlalchemy import SQLAlchemy
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
+
+# Use a local SQLite DB for simplicity
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///ai_medical.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'super-secret-key-change-this-in-prod')
+
+db = SQLAlchemy(app)
+jwt = JWTManager(app)
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    role = db.Column(db.String(20), nullable=False)  # 'doctor' or 'patient'
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+# Create DB and seed default users
+with app.app_context():
+    db.create_all()
+    
+    # Doctor default
+    if not User.query.filter_by(username='doctor').first():
+        doctor = User(username='doctor', role='doctor')
+        doctor.set_password('medical')
+        db.session.add(doctor)
+        print("Created default doctor: doctor / medical")
+
+    # Patient default
+    if not User.query.filter_by(username='patient').first():
+        patient = User(username='patient', role='patient')
+        patient.set_password('medical')
+        db.session.add(patient)
+        print("Created default patient: patient / medical")
+        
+    db.session.commit()
+
+# -------------------------------------------------------------------
+# Auth Routes
+# -------------------------------------------------------------------
+@app.route('/signup', methods=['POST'])
+def signup():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    role = data.get('role', 'patient')  # default to patient
+
+    if not username or not password:
+        return jsonify({"error": "Missing username or password"}), 400
+    
+    if User.query.filter_by(username=username).first():
+        return jsonify({"error": "Username already exists"}), 400
+    
+    new_user = User(username=username, role=role)
+    new_user.set_password(password)
+    db.session.add(new_user)
+    db.session.commit()
+    
+    return jsonify({"message": "User created successfully"}), 201
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+
+    user = User.query.filter_by(username=username).first()
+    if not user or not user.check_password(password):
+        return jsonify({"error": "Invalid credentials"}), 401
+    
+    access_token = create_access_token(identity={'username': user.username, 'role': user.role})
+    return jsonify({
+        "access_token": access_token,
+        "role": user.role,
+        "username": user.username
+    }), 200
 
 @app.route("/healthz")
 def health():

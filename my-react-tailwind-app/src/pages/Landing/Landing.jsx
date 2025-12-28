@@ -68,35 +68,46 @@ const Landing = () => {
                         Get instant, accurate insights in simple language.
                     </p>
 
-                    <motion.button
-                        onClick={() => navigate('/dashboard')}
-                        className="group inline-flex items-center gap-3 px-8 py-4 rounded-2xl text-lg font-bold text-white shadow-2xl relative overflow-hidden"
-                        style={{
-                            background: 'linear-gradient(135deg, #0d9488 0%, #06b6d4 100%)'
-                        }}
-                        whileHover={{ scale: 1.05, boxShadow: "0 25px 50px rgba(13, 148, 136, 0.4)" }}
-                        whileTap={{ scale: 0.98 }}
-                    >
-                        <span className="relative z-10">Get Started</span>
-                        <ArrowRight className="w-6 h-6 relative z-10 group-hover:translate-x-1 transition-transform" />
+                    <div className="flex gap-4 justify-center">
+                        <motion.button
+                            onClick={() => navigate('/login')}
+                            className="group inline-flex items-center gap-3 px-8 py-4 rounded-2xl text-lg font-bold text-teal-600 bg-white shadow-lg border border-teal-100 hover:border-teal-200"
+                            whileHover={{ scale: 1.05, boxShadow: "0 20px 40px rgba(0,0,0,0.05)" }}
+                            whileTap={{ scale: 0.98 }}
+                        >
+                            <span>Sign In</span>
+                        </motion.button>
 
-                        {/* Animated shine effect */}
-                        <motion.div
-                            className="absolute inset-0"
+                        <motion.button
+                            onClick={() => navigate('/signup')}
+                            className="group inline-flex items-center gap-3 px-8 py-4 rounded-2xl text-lg font-bold text-white shadow-2xl relative overflow-hidden"
                             style={{
-                                background: 'radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%)'
+                                background: 'linear-gradient(135deg, #0d9488 0%, #06b6d4 100%)'
                             }}
-                            animate={{
-                                scale: [1, 1.5, 1],
-                                opacity: [0.5, 0, 0.5]
-                            }}
-                            transition={{
-                                duration: 2,
-                                repeat: Infinity,
-                                ease: "easeInOut"
-                            }}
-                        />
-                    </motion.button>
+                            whileHover={{ scale: 1.05, boxShadow: "0 25px 50px rgba(13, 148, 136, 0.4)" }}
+                            whileTap={{ scale: 0.98 }}
+                        >
+                            <span className="relative z-10">Get Started</span>
+                            <ArrowRight className="w-6 h-6 relative z-10 group-hover:translate-x-1 transition-transform" />
+
+                            {/* Animated shine effect */}
+                            <motion.div
+                                className="absolute inset-0"
+                                style={{
+                                    background: 'radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%)'
+                                }}
+                                animate={{
+                                    scale: [1, 1.5, 1],
+                                    opacity: [0.5, 0, 0.5]
+                                }}
+                                transition={{
+                                    duration: 2,
+                                    repeat: Infinity,
+                                    ease: "easeInOut"
+                                }}
+                            />
+                        </motion.button>
+                    </div>
                 </motion.div>
 
                 {/* Features Grid */}
