@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
-import { Send, Paperclip, X, FileText } from 'lucide-react';
+import { Send, Paperclip, X, FileText, Image as ImageIcon } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const InputArea = ({ onSendMessage, disabled }) => {
     const [input, setInput] = useState('');
@@ -16,7 +17,6 @@ const InputArea = ({ onSendMessage, disabled }) => {
     const handleKeyDown = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            // Allow sending if there is text OR a file selected
             if (input.trim() || selectedFile) {
                 handleSend();
             }
@@ -29,8 +29,8 @@ const InputArea = ({ onSendMessage, disabled }) => {
             const reader = new FileReader();
             reader.onloadend = () => {
                 setSelectedFile({
-                    file: file, // Store raw file for upload
-                    content: reader.result, // Keep DataURL for preview
+                    file: file,
+                    content: reader.result,
                     type: file.type,
                     name: file.name
                 });
@@ -40,35 +40,62 @@ const InputArea = ({ onSendMessage, disabled }) => {
     };
 
     return (
-        <div className="bg-white border-t p-4">
+        <div className="glass border-t p-4 backdrop-blur-xl sticky bottom-0">
             <div className="max-w-3xl mx-auto">
-                {selectedFile && (
-                    <div className="mb-2 relative inline-flex items-center gap-2 bg-gray-100 p-2 rounded-lg border">
-                        {selectedFile.type.startsWith('image/') ? (
-                            <img src={selectedFile.content} alt="Preview" className="h-12 w-12 object-cover rounded" />
-                        ) : (
-                            <div className="h-12 w-12 bg-red-100 text-red-600 flex items-center justify-center rounded">
-                                <FileText size={24} />
-                            </div>
-                        )}
-                        <span className="text-sm text-gray-600 truncate max-w-[150px]">{selectedFile.name}</span>
-                        <button
-                            onClick={() => setSelectedFile(null)}
-                            className="bg-gray-200 text-gray-600 rounded-full p-1 hover:bg-gray-300"
+                <AnimatePresence>
+                    {selectedFile && (
+                        <motion.div
+                            className="mb-3 relative inline-flex items-center gap-3 glass-card p-3 rounded-xl shadow-lg"
+                            initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: -10, scale: 0.9 }}
+                            transition={{ type: "spring", stiffness: 300, damping: 25 }}
                         >
-                            <X size={12} />
-                        </button>
-                    </div>
-                )}
-                <div className="flex gap-2 items-end bg-gray-50 p-2 rounded-xl border focus-within:ring-2 focus-within:ring-teal-500 focus-within:border-transparent transition-all">
-                    <button
+                            {selectedFile.type.startsWith('image/') ? (
+                                <div className="relative">
+                                    <img
+                                        src={selectedFile.content}
+                                        alt="Preview"
+                                        className="h-16 w-16 object-cover rounded-lg shadow-md border-2 border-cyan-200"
+                                    />
+                                    <div className="absolute -top-1 -right-1 w-5 h-5 bg-gradient-to-br from-cyan-400 to-blue-500 rounded-full flex items-center justify-center">
+                                        <ImageIcon size={12} className="text-white" />
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="h-16 w-16 bg-gradient-to-br from-red-400 to-orange-500 text-white flex items-center justify-center rounded-lg shadow-md">
+                                    <FileText size={28} />
+                                </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-semibold text-gray-800 truncate">{selectedFile.name}</p>
+                                <p className="text-xs text-gray-500">
+                                    {selectedFile.type.startsWith('image/') ? 'Image' : 'PDF Document'}
+                                </p>
+                            </div>
+                            <motion.button
+                                onClick={() => setSelectedFile(null)}
+                                className="bg-gray-100 hover:bg-red-100 text-gray-600 hover:text-red-600 rounded-full p-1.5 transition-colors"
+                                whileHover={{ scale: 1.1 }}
+                                whileTap={{ scale: 0.9 }}
+                            >
+                                <X size={14} />
+                            </motion.button>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
+                <div className="flex gap-3 items-end glass-card p-3 rounded-2xl focus-within:ring-2 focus-within:ring-cyan-400 focus-within:ring-offset-2 transition-all">
+                    <motion.button
                         onClick={() => fileInputRef.current?.click()}
-                        className="p-2 text-gray-400 hover:text-teal-600 transition-colors focus:outline-none"
+                        className="p-2.5 text-gray-400 hover:text-cyan-600 transition-colors focus:outline-none rounded-xl hover:bg-cyan-50"
                         disabled={disabled}
                         title="Upload File (Image or PDF)"
+                        whileHover={{ scale: 1.1, rotate: 15 }}
+                        whileTap={{ scale: 0.95 }}
                     >
-                        <Paperclip size={20} />
-                    </button>
+                        <Paperclip size={22} />
+                    </motion.button>
                     <input
                         type="file"
                         ref={fileInputRef}
@@ -80,18 +107,41 @@ const InputArea = ({ onSendMessage, disabled }) => {
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="Describe your symptoms or upload a report..."
+                        placeholder="Describe your symptoms or upload a medical report..."
                         className="flex-1 bg-transparent border-none focus:ring-0 resize-none max-h-32 py-2 text-gray-800 placeholder-gray-400 focus:outline-none"
                         rows={1}
                         disabled={disabled}
                     />
-                    <button
+                    <motion.button
                         onClick={handleSend}
                         disabled={(!input.trim() && !selectedFile) || disabled}
-                        className="p-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-teal-500"
+                        className="p-3 text-white rounded-xl disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 shadow-lg relative overflow-hidden"
+                        style={{
+                            background: 'linear-gradient(135deg, #0d9488 0%, #06b6d4 100%)'
+                        }}
+                        whileHover={!disabled && (!input.trim() && !selectedFile) ? {} : { scale: 1.05 }}
+                        whileTap={!disabled && (!input.trim() && !selectedFile) ? {} : { scale: 0.95 }}
                     >
-                        <Send size={20} />
-                    </button>
+                        {/* Pulse effect when ready to send */}
+                        {!disabled && (input.trim() || selectedFile) && (
+                            <motion.div
+                                className="absolute inset-0"
+                                style={{
+                                    background: 'radial-gradient(circle, rgba(255,255,255,0.4) 0%, transparent 70%)'
+                                }}
+                                animate={{
+                                    scale: [1, 1.2, 1],
+                                    opacity: [0.5, 0, 0.5]
+                                }}
+                                transition={{
+                                    duration: 1.5,
+                                    repeat: Infinity,
+                                    ease: "easeInOut"
+                                }}
+                            />
+                        )}
+                        <Send size={20} className="relative z-10" />
+                    </motion.button>
                 </div>
             </div>
         </div>

@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import ChatBubble from '../../components/medical/ChatBubble';
 import InputArea from '../../components/medical/InputArea';
 import { Bot, Stethoscope, User } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 const Assistant = () => {
     const { user } = useAuth();
@@ -118,36 +119,84 @@ const Assistant = () => {
 
     return (
         <div className="flex flex-col h-[calc(100vh-4rem)]">
-            <div className="bg-white border-b px-4 py-2 flex items-center gap-2 shadow-sm">
+            <div className="glass border-b px-6 py-3 flex items-center gap-3 shadow-md relative overflow-hidden"
+                style={{
+                    background: 'linear-gradient(135deg, rgba(13, 148, 136, 0.9) 0%, rgba(6, 182, 212, 0.9) 100%)'
+                }}
+            >
+                {/* Animated shimmer overlay */}
+                <div className="absolute inset-0 shimmer opacity-20" />
+
                 {user?.role === 'doctor' ? (
-                    <div className="bg-teal-100 p-1.5 rounded-lg text-teal-700">
-                        <Stethoscope size={18} />
-                    </div>
+                    <motion.div
+                        className="glass-card p-2 rounded-lg text-teal-700 relative z-10"
+                        initial={{ rotate: 0 }}
+                        animate={{ rotate: [0, 5, -5, 0] }}
+                        transition={{ duration: 2, repeat: Infinity, repeatDelay: 3 }}
+                    >
+                        <Stethoscope size={20} />
+                    </motion.div>
                 ) : (
-                    <div className="bg-indigo-100 p-1.5 rounded-lg text-indigo-700">
-                        <User size={18} />
-                    </div>
+                    <motion.div
+                        className="glass-card p-2 rounded-lg text-indigo-700 relative z-10"
+                        initial={{ scale: 1 }}
+                        animate={{ scale: [1, 1.1, 1] }}
+                        transition={{ duration: 2, repeat: Infinity, repeatDelay: 3 }}
+                    >
+                        <User size={20} />
+                    </motion.div>
                 )}
-                <span className="font-medium text-gray-700 capitalize">{user?.role} Mode</span>
+                <span className="font-semibold text-white capitalize relative z-10 text-lg">
+                    {user?.role} Mode
+                </span>
+                <div className="flex-1" />
+                <div className="relative z-10 flex items-center gap-2 glass-card px-3 py-1 rounded-full">
+                    <div className="w-2 h-2 bg-green-400 rounded-full pulse-glow" />
+                    <span className="text-xs font-medium text-gray-700">AI Active</span>
+                </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-gray-50">
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 relative"
+                style={{
+                    background: 'linear-gradient(to bottom, #f0f9ff, #fefce8)',
+                    backgroundImage: 'radial-gradient(at 20% 30%, hsla(188, 94%, 43%, 0.08) 0px, transparent 50%), radial-gradient(at 80% 70%, hsla(245, 83%, 65%, 0.06) 0px, transparent 50%)'
+                }}
+            >
                 {messages.map((msg, index) => (
                     <ChatBubble key={index} message={msg} />
                 ))}
                 {isTyping && (
-                    <div className="flex gap-3 max-w-3xl mx-auto">
-                        <div className="w-8 h-8 rounded-full bg-teal-100 text-teal-600 flex items-center justify-center shrink-0">
-                            <Bot size={16} />
+                    <motion.div
+                        className="flex gap-3 max-w-3xl mx-auto"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                    >
+                        <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 shadow-md bg-gradient-to-br from-teal-500 to-cyan-600 text-white">
+                            <Bot size={18} />
                         </div>
-                        <div className="bg-white border border-gray-200 p-4 rounded-2xl rounded-tl-none shadow-sm">
-                            <div className="flex gap-1">
-                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                        <div className="glass-card p-5 rounded-2xl rounded-tl-none shadow-lg">
+                            <div className="flex gap-1.5">
+                                <motion.div
+                                    className="w-2.5 h-2.5 rounded-full"
+                                    style={{ background: 'linear-gradient(135deg, #0d9488, #06b6d4)' }}
+                                    animate={{ y: [-3, 0, -3] }}
+                                    transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
+                                />
+                                <motion.div
+                                    className="w-2.5 h-2.5 rounded-full"
+                                    style={{ background: 'linear-gradient(135deg, #0d9488, #06b6d4)' }}
+                                    animate={{ y: [-3, 0, -3] }}
+                                    transition={{ duration: 0.6, repeat: Infinity, delay: 0.2 }}
+                                />
+                                <motion.div
+                                    className="w-2.5 h-2.5 rounded-full"
+                                    style={{ background: 'linear-gradient(135deg, #0d9488, #06b6d4)' }}
+                                    animate={{ y: [-3, 0, -3] }}
+                                    transition={{ duration: 0.6, repeat: Infinity, delay: 0.4 }}
+                                />
                             </div>
                         </div>
-                    </div>
+                    </motion.div>
                 )}
                 <div ref={messagesEndRef} />
             </div>

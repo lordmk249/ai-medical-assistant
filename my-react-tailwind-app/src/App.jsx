@@ -5,6 +5,7 @@ import Navbar from './components/layout/Navbar';
 import Sidebar from './components/layout/Sidebar';
 import Footer from './components/layout/Footer';
 import Dashboard from './pages/Dashboard/Dashboard';
+import Landing from './pages/Landing/Landing';
 import Assistant from './pages/Assistant/Assistant';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useState } from 'react';
@@ -26,7 +27,8 @@ function App() {
               <Navbar toggleSidebar={toggleSidebar} />
               <main className="flex-1 overflow-y-auto p-4 md:p-6">
                 <Routes>
-                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/" element={<Landing />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
                   <Route path="/assistant" element={
                     <ErrorBoundary>
                       <Assistant />
