@@ -63,13 +63,15 @@ translation_lock = threading.Lock()
 load_dotenv()
 
 import google.genai as genai
+client = None
 if os.getenv("GEMINI_API_KEY"):
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     print("Gemini API configured.")
 else:
     print("WARNING: GEMINI_API_KEY not found in environment.")
 
 from flask_cors import CORS
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 app = Flask(__name__)
 CORS(app)
@@ -640,11 +642,10 @@ def translate_text(text, target_lang="ar"):
 
 def analyze_with_gemini(text):
     """Use Gemini Pro to analyze medical text for summary, vitals, and entities."""
-    if not os.getenv("GEMINI_API_KEY"):
+    if not client:
         return None
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = f"""
         Analyze the following medical report text and provide:
         1. A patient-friendly summary (simple language).
@@ -661,7 +662,10 @@ def analyze_with_gemini(text):
         Medical Text:
         {text}
         """
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
         # Attempt to parse JSON from response
         import json
         import re
@@ -727,20 +731,9 @@ def process_file():
         target = request.form.get("translate_to", "ar")
         translation = translate_text(summary if isinstance(summary, str) else cleaned, target_lang=target)
 
-        # Save to Database
-        new_report = Report(
-            original_text=cleaned,
-            summary=summary,
-            vitals=vitals,
-            entities=entities_pretty,
-            translation=translation
-        )
-        db.session.add(new_report)
-        db.session.commit()
-
-        # Provide both legacy and improved fields. Keep 'text' for backward compatibility
+        # Save to Database (guarded)
+        saved = False
         resp = {
-            "id": new_report.id,
             # Legacy (original behaviour)
             "text": cleaned[:10000],  # limited snippet for compatibility
             "text_length": len(cleaned),
@@ -752,8 +745,41 @@ def process_file():
             "vitals": vitals,
             "summary": summary,
             "translation": translation,
-            "created_at": new_report.created_at.isoformat()
         }
+
+        if DB_AVAILABLE:
+            try:
+                new_report = Report(
+                    original_text=cleaned,
+                    summary=summary,
+                    vitals=vitals,
+                    entities=entities_pretty,
+                    translation=translation
+                )
+                db.session.add(new_report)
+                db.session.commit()
+                saved = True
+                resp["id"] = new_report.id
+                try:
+                    resp["created_at"] = new_report.created_at.isoformat()
+                except Exception:
+                    resp["created_at"] = None
+            except OperationalError as oe:
+                # Log details server-side, but show a friendly message to the patient
+                print(f"DB write OperationalError: {oe}")
+                db.session.rollback()
+                return jsonify({"error": "Server error: unable to save report right now. Please try again later."}), 500
+            except SQLAlchemyError as sqe:
+                print(f"DB write error: {sqe}")
+                db.session.rollback()
+                return jsonify({"error": "Server error: unable to save report right now. Please try again later."}), 500
+            except Exception as e:
+                print(f"Unexpected DB error while saving report: {e}")
+                db.session.rollback()
+                return jsonify({"error": "Server error: unable to save report right now. Please try again later."}), 500
+        else:
+            # DB not available: return a user-friendly message but still provide analysis result
+            resp["warning"] = "Analysis completed but server storage is currently unavailable. Please try again later."
 
         return jsonify(resp)
     except Exception as e:
@@ -785,8 +811,27 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
 
+# Ensure instance directory exists and DB path is writable
+INSTANCE_DIR = BASE_DIR / "instance"
+INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
+
 # Use a local SQLite DB in the instance folder
-db_path = BASE_DIR / "instance" / "ai_medical.db"
+db_path = INSTANCE_DIR / "ai_medical.db"
+# Ensure the DB file exists so we can try to adjust permissions
+try:
+    if not db_path.exists():
+        # create an empty file
+        db_path.touch(mode=0o664, exist_ok=True)
+    else:
+        # attempt to make writable by owner/group
+        try:
+            os.chmod(db_path, 0o664)
+        except Exception:
+            pass
+except Exception:
+    # best-effort only; continue and let SQLAlchemy surface errors if any
+    pass
+
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', f'sqlite:///{db_path}')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'super-secret-key-change-this-in-prod')
@@ -819,24 +864,40 @@ class Report(db.Model):
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
 
 # Create DB and seed default users
+DB_AVAILABLE = True
 with app.app_context():
-    db.create_all()
-    
-    # Doctor default
-    if not User.query.filter_by(username='doctor').first():
-        doctor = User(username='doctor', role='doctor')
-        doctor.set_password('medical')
-        db.session.add(doctor)
-        print("Created default doctor: doctor / medical")
+    try:
+        db.create_all()
+    except OperationalError as oe:
+        DB_AVAILABLE = False
+        print(f"Database initialization error: {oe}")
+    except Exception as e:
+        DB_AVAILABLE = False
+        print(f"Unexpected DB init error: {e}")
 
-    # Patient default
-    if not User.query.filter_by(username='patient').first():
-        patient = User(username='patient', role='patient')
-        patient.set_password('medical')
-        db.session.add(patient)
-        print("Created default patient: patient / medical")
-        
-    db.session.commit()
+    if DB_AVAILABLE:
+        try:
+            # Doctor default
+            if not User.query.filter_by(username='doctor').first():
+                doctor = User(username='doctor', role='doctor')
+                doctor.set_password('medical')
+                db.session.add(doctor)
+                print("Created default doctor: doctor / medical")
+
+            # Patient default
+            if not User.query.filter_by(username='patient').first():
+                patient = User(username='patient', role='patient')
+                patient.set_password('medical')
+                db.session.add(patient)
+                print("Created default patient: patient / medical")
+
+            db.session.commit()
+        except SQLAlchemyError as sae:
+            DB_AVAILABLE = False
+            print(f"Database seeding/commit error: {sae}")
+        except Exception as e:
+            DB_AVAILABLE = False
+            print(f"Unexpected DB seeding error: {e}")
 
 # -------------------------------------------------------------------
 # Auth Routes
@@ -949,6 +1010,17 @@ def health():
     checks["summarizer_loaded"] = summarizer is not None
     checks["max_file_size_mb"] = MAX_FILE_SIZE // (1024 * 1024)
     checks["allowed_extensions"] = list(ALLOWED_EXTENSIONS)
+    try:
+        checks["db_available"] = bool(DB_AVAILABLE)
+        checks["db_path"] = str(db_path)
+        # quick writable check
+        try:
+            checks["db_writable"] = os.access(str(db_path), os.W_OK)
+        except Exception:
+            checks["db_writable"] = False
+    except Exception:
+        checks["db_available"] = False
+        checks["db_writable"] = False
 
     return jsonify(checks)
 
