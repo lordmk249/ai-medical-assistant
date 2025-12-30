@@ -1,0 +1,35 @@
+flask
+google-genai
+psycopg2-binary
+fastapi
+python-multipart
+pytesseract
+pillow
+pdf2image
+opencv-python-headless<4.10
+deep-translator
+spacy>=3.7.4,<3.8.0
+scispacy
+# scispacy model (install via pip directly if preferred):
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
+transformers
+sentencepiece
+# CORS for frontend development
+flask-cors
+# Pin numpy to <2.0.0 to avoid compatibility issues with torch/transformers
+numpy<2.0.0
+# Optional: torch required by some transformer models. Install the correct wheel for your OS/Python
+# torch
+google-cloud-vision
+boto3
+azure-ai-translation-text
+python-dotenv
+requests
+
+PyPDF2
+
+# Auth
+flask-sqlalchemy
+flask-jwt-extended
+passlib
+bcrypt
