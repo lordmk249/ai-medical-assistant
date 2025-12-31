@@ -1,6 +1,6 @@
 flask
 google-genai
-psycopg2-binary
+# psycopg2-binary
 fastapi
 python-multipart
 pytesseract

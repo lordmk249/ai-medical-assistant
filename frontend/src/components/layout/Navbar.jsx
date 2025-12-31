@@ -31,14 +31,6 @@ const Navbar = ({ toggleSidebar }) => {
                     </div>
                 </div>
                 <div className="flex items-center gap-3">
-                    <motion.button
-                        onClick={() => login(user?.role === 'doctor' ? 'patient' : 'doctor', 'medical')}
-                        className="glass-card px-4 py-2 rounded-xl text-sm font-semibold transition-all text-gray-700 hover:text-gray-900 shadow-md"
-                        whileHover={{ scale: 1.05, boxShadow: "0 8px 20px rgba(0,0,0,0.15)" }}
-                        whileTap={{ scale: 0.95 }}
-                    >
-                        Switch to {user?.role === 'doctor' ? 'Patient' : 'Doctor'}
-                    </motion.button>
                     <div className="hidden md:flex items-center gap-2 glass-card px-3 py-1.5 rounded-xl">
                         <User size={18} className="text-cyan-700" />
                         <span className="text-sm font-medium text-gray-700">{user?.name} ({user?.role})</span>
